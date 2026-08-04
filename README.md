@@ -84,7 +84,14 @@ score can answer alone.
 pip install -r requirements.txt
 ```
 
-3. Run the app:
+3. (Only needed for the agentic `--agent` mode below) Get an API key from the
+   [Anthropic Console](https://console.anthropic.com/) and export it:
+
+```bash
+export ANTHROPIC_API_KEY=your-key-here
+```
+
+4. Run the app:
 
 ```bash
 python -m src.main
@@ -98,7 +105,56 @@ Run the starter tests with:
 pytest
 ```
 
-You can add more tests in `tests/test_recommender.py`.
+Tests for the agentic workflow (`tests/test_agent.py`) mock every Claude API
+call, so the full suite runs with **no** `ANTHROPIC_API_KEY` set and makes no
+network requests. You can add more tests in `tests/test_recommender.py`.
+
+---
+
+## Agentic Mode: Natural-Language Recommendations
+
+Beyond the fixed demo profiles above, the recommender also supports an
+**agentic workflow** (`src/agent.py`) that lets you describe your taste in
+plain English instead of a structured profile:
+
+```bash
+python -m src.main --agent "chill music for studying, not too acoustic"
+```
+
+or, to be prompted interactively:
+
+```bash
+python -m src.main --agent
+```
+
+This runs a **plan → act → check → (retry) → explain** loop:
+
+1. **Plan** — an LLM call (`parse_preferences`) turns your free text into the
+   same `genre`/`mood`/`energy`/`likes_acoustic` shape the scorer already
+   expects, constrained to genres/moods that actually exist in the catalog.
+2. **Act** — the existing `recommend_songs` scorer runs unchanged.
+3. **Check** — `check_results` inspects the results (unknown genre/mood, too
+   few results, top score below a threshold) with plain Python, no LLM call.
+4. **Retry** — if the check fails, `revise_preferences` asks the LLM to fix
+   the specific issues found, up to 2 times.
+5. **Explain** — a final LLM call writes a short natural-language summary,
+   but only from the actual `(song, score, reasons)` data returned by the
+   scorer. A guardrail checks the response actually references one of the
+   real song titles it was given; if it doesn't (a hallucination), the code
+   falls back to the same deterministic explanation format used in the demo
+   profiles above instead of showing the LLM's text.
+
+Every step logs to the console (parsed preferences, self-check verdicts,
+retries and why, guardrail trips) so you can see exactly what the agent did.
+If `ANTHROPIC_API_KEY` isn't set, `--agent` prints a clear message and exits
+instead of crashing; if a Claude API call fails mid-run (network issue, rate
+limit), the code logs it and falls back to a best-effort result rather than
+raising.
+
+**Limitations:** the self-check is a small set of heuristics (score
+threshold, catalog membership), not a learned evaluator, and the grounding
+guardrail on the explanation only checks that a real song title appears — it
+doesn't verify every claim in the prose is factually accurate.
 
 ---
 
