@@ -146,3 +146,89 @@ system feel intentional and smart even though it's just weighted arithmetic. If 
 extended this project, I'd want to add the tempo/valence features and try building a
 small collaborative-filtering layer on top to see how differently it behaves from pure
 content-based scoring.
+
+---
+
+## 10. Agentic Workflow — AI Collaboration & Responsible-AI Reflection
+
+This section covers the second phase of the project: `src/agent.py`, which adds an
+LLM-driven plan → act → check → retry → explain loop on top of the scorer above (see
+`README.md` → Architecture Overview and `diagrams/system_diagram.md` for how it fits
+together).
+
+### How I collaborated with AI
+
+I built this feature working with Claude Code (Claude, Anthropic's coding assistant)
+directly — describing the goal ("add an agentic workflow" as a stretch feature),
+reviewing a written implementation plan before any code was generated, and then
+reviewing every file it wrote (`src/agent.py`, the `--agent` CLI flag in `src/main.py`,
+and the mocked test suite in `tests/test_agent.py`) rather than accepting it blind.
+
+### One helpful AI suggestion
+
+Claude Code's plan proposed using the Claude API's **structured-output** feature
+(`output_config.format` with a JSON schema) for `parse_preferences` and
+`revise_preferences`, instead of asking the model to "return JSON" as free text and
+then regex-parsing or retry-looping on malformed output. This was genuinely useful: it
+eliminates an entire class of fragile string-parsing bugs, and it's the kind of API
+detail that's easy to miss without checking current documentation rather than
+half-remembered defaults.
+
+### One flawed AI suggestion (and how it was caught)
+
+The first draft of the grounding guardrail in `generate_explanation` tried to detect a
+hallucinated song title by checking for the *absence* of some bad pattern — but the
+placeholder code it produced (`any(title not in text and False for title in [])`) was
+dead logic that could never actually flag anything; it looked like a check but wasn't
+one. I caught this on review and had it rewritten as a **positive, allow-list check**
+instead: does the response mention at least one of the *real* song titles it was
+handed? That's both simpler and directly testable — `tests/test_agent.py` mocks a
+response that invents a fake title and asserts the fallback triggers. The broader
+lesson: guardrails on generative output are much easier to write and verify as
+allow-list checks against known-good data than as deny-list checks against
+unknown-bad output, and a plausible-looking check is worth reading closely, not just
+trusting because it compiles.
+
+### Testing results (reliability)
+
+Two of the four reliability mechanisms suggested by the assignment are in place here:
+
+- **Automated tests.** 8 of 8 tests pass (`pytest`): the 2 original recommender tests,
+  plus 6 new tests covering the agent's self-check heuristics (unknown genre/mood, low
+  score, too few results), preference clamping (out-of-range energy, casing), the
+  retry loop (exactly one retry when a bad parse is fixed by revision; stops cleanly
+  after `max_retries` when it isn't), and the grounding guardrail (a mocked response
+  that invents a song is discarded and replaced with the deterministic fallback). All
+  agent tests mock the Claude API calls directly, so they run in well under a second
+  with **no API key and no network access** — this was deliberate, so reliability of
+  the deterministic logic can be verified independently of whether a live model call
+  succeeds.
+- **Logging and error handling.** Every step of the agent loop logs to
+  `music_recommender.agent` (parsed preferences, self-check verdicts, retry reasons,
+  guardrail trips), and every Claude API call site is wrapped in a
+  try/except for `anthropic.APIError`/`anthropic.APIConnectionError` that logs the
+  failure and falls back to a best-effort result instead of crashing.
+
+**What this doesn't cover:** no live end-to-end run against the real Claude API was
+performed in this environment (no `ANTHROPIC_API_KEY` was configured), so while the
+surrounding logic (parsing, checking, retrying, grounding) is verified by the mocked
+test suite, the actual quality and reliability of the real model's outputs — how often
+it correctly extracts preferences, how often the self-check actually needs to trigger
+a retry against real model output, how often the grounding guardrail actually fires in
+practice — is not yet measured. Confidence scoring (the model rating its own certainty)
+was not implemented; that's the reliability mechanism I'd add next, since right now the
+self-check is a fixed set of heuristics rather than something the model itself
+reasons about.
+
+### Limitations specific to the agentic layer
+
+- The self-check (`check_results`) is a small, hand-picked set of heuristics — catalog
+  membership and a score threshold — not a learned or LLM-based evaluator. It can miss
+  failure modes it wasn't written to look for.
+- The grounding guardrail only verifies that a real song title appears in the
+  generated text; it does not verify that every other claim in the prose (why a song
+  fits, what the scores mean) is factually accurate.
+- Retries are capped at 2 for cost and latency reasons, which means a request the
+  model genuinely can't resolve (e.g., asking for a genre nowhere in an 18-song
+  catalog) will still return a best-effort — possibly poor — result rather than an
+  honest "I don't have anything like that."

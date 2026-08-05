@@ -232,6 +232,13 @@ for a concrete example of that path under test.
 
 ## Testing Summary
 
+> **In short:** 8 of 8 automated tests passed (2 original scorer tests + 6 new agent
+> tests covering self-check heuristics, retry behavior, preference clamping, and the
+> explanation grounding guardrail). No live end-to-end call to the real Claude API was
+> made in this environment (no key configured), so the mocked logic is verified but
+> real-model reliability isn't yet measured — see `model_card.md` § 10 for the full
+> breakdown, including logging/error-handling as the second reliability mechanism.
+
 - **What worked:** All 8 tests pass, including the original recommender tests and 6
   new ones for the agent. Every agent test mocks `_call_claude_json`/`_call_claude_text`
   directly (see `tests/test_agent.py`), so the whole suite runs with **no API key and
